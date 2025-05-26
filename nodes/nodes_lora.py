@@ -428,6 +428,147 @@ class CR_RandomLoRAStack:
 
         return (lora_list,)
 
+class CR_RandomLoRACustom:
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        loras = ["None"] + folder_paths.get_filename_list("loras")
+        required = {
+            "exclusive_mode": (["Off", "On"],),
+            "stride": (("INT", {"default": 1, "min": 1, "max": 1000})),
+            "force_randomize_after_stride": (["Off", "On"],),
+        }
+
+        for i in range(1, 11):
+            required.update({
+                f"lora_name_{i}": (loras,),
+                f"switch_{i}": (["Off", "On"],),
+                f"chance_{i}": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                f"model_weight_{i}": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
+                f"clip_weight_{i}": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
+            })
+
+        return {
+            "required": required,
+            "optional": {"lora_stack": ("LORA_STACK",)},
+        }
+
+    RETURN_TYPES = ("LORA_STACK",)
+    FUNCTION = "random_lora_stacker"
+    CATEGORY = icons.get("Comfyroll/LoRA")
+
+    UsedLorasMap = {}
+    StridesMap = {}
+    LastHashMap = {}
+
+    @staticmethod
+    def getIdHash(*lora_names):
+        return hash(frozenset(lora_names))
+
+    @staticmethod
+    def deduplicateLoraNames(*lora_names):
+        seen = {}
+        result = []
+        for i, name in enumerate(lora_names):
+            suffix = f"CR_RandomLoRAStack_{i+1}"
+            if name != "None" and name in seen:
+                result.append(name + suffix)
+            else:
+                seen[name] = True
+                result.append(name)
+        return result
+
+    @staticmethod
+    def cleanLoraName(name):
+        for i in range(1, 11):
+            name = name.replace(f"CR_RandomLoRAStack_{i}", "")
+        return name
+
+    @classmethod
+    def IS_CHANGED(cls, exclusive_mode, stride, force_randomize_after_stride, lora_stack=None, **kwargs):
+        lora_names = [kwargs[f"lora_name_{i}"] for i in range(1, 11)]
+        switches = [kwargs[f"switch_{i}"] for i in range(1, 11)]
+        chances = [kwargs[f"chance_{i}"] for i in range(1, 11)]
+
+        lora_names = cls.deduplicateLoraNames(*lora_names)
+        id_hash = cls.getIdHash(*lora_names)
+
+        cls.StridesMap.setdefault(id_hash, 0)
+        cls.StridesMap[id_hash] += 1
+
+        if stride > 1 and cls.StridesMap[id_hash] < stride and id_hash in cls.LastHashMap:
+            return cls.LastHashMap[id_hash]
+        else:
+            cls.StridesMap[id_hash] = 0
+
+        total_on = sum(
+            1 for i in range(10)
+            if lora_names[i] != "None" and switches[i] == "On" and chances[i] > 0.0
+        )
+
+        def perform_randomization():
+            rand_vals = [random() for _ in range(10)]
+            apply_flags = [
+                switches[i] == "On" and rand_vals[i] <= chances[i]
+                for i in range(10)
+            ]
+
+            if exclusive_mode == "On" and sum(apply_flags) > 1:
+                min_idx = min(
+                    (i for i in range(10) if apply_flags[i]),
+                    key=lambda x: rand_vals[x]
+                )
+                apply_flags = [i == min_idx for i in range(10)]
+
+            return {
+                lora_names[i]
+                for i in range(10)
+                if lora_names[i] != "None" and apply_flags[i]
+            }
+
+        last_lora_set = cls.UsedLorasMap.get(id_hash, set())
+        lora_set = perform_randomization()
+
+        if force_randomize_after_stride == "On" and len(last_lora_set) > 0 and total_on > 1:
+            attempts = 0
+            while lora_set == last_lora_set and attempts < 10:
+                lora_set = perform_randomization()
+                attempts += 1
+
+        cls.UsedLorasMap[id_hash] = lora_set
+        hash_str = str(hash(frozenset(lora_set)))
+        cls.LastHashMap[id_hash] = hash_str
+        return hash_str
+
+    def random_lora_stacker(self, exclusive_mode, stride, force_randomize_after_stride, lora_stack=None, **kwargs):
+        lora_list = list()
+
+        if lora_stack is not None:
+            lora_list.extend([l for l in lora_stack if l[0] != "None"])
+
+        lora_names = [kwargs[f"lora_name_{i}"] for i in range(1, 11)]
+        switches = [kwargs[f"switch_{i}"] for i in range(1, 11)]
+        model_weights = [kwargs[f"model_weight_{i}"] for i in range(1, 11)]
+        clip_weights = [kwargs[f"clip_weight_{i}"] for i in range(1, 11)]
+
+        lora_names = self.deduplicateLoraNames(*lora_names)
+        id_hash = self.getIdHash(*lora_names)
+        used_loras = self.UsedLorasMap.get(id_hash, set())
+
+        for i in range(10):
+            if (
+                lora_names[i] != "None"
+                and switches[i] == "On"
+                and lora_names[i] in used_loras
+            ):
+                lora_list.append((
+                    self.cleanLoraName(lora_names[i]),
+                    model_weights[i],
+                    clip_weights[i]
+                ))
+
+        return (lora_list,)
+
 #---------------------------------------------------------------------------------------------------------------------#
 # MAPPINGS
 #---------------------------------------------------------------------------------------------------------------------#
