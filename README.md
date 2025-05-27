@@ -79,6 +79,7 @@ __💊 LoRA__
 * CR LoRA Stack
 * CR Apply LoRA Stack
 * CR Random LoRA Stack (new 18/12/2023)
+* CR Random LoRA Custom (new 27/05/2025)
 * CR Random Weight LoRA (new 18/12/2023)
 
 __🕹️ ControlNet__
