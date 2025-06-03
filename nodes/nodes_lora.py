@@ -5,12 +5,16 @@
 
 import os
 import sys
+import requests  # You'll need requests for HTTP calls
 import comfy.sd
 import comfy.utils
 import folder_paths
 import hashlib
-from random import random, uniform
+import json
+from random import random, uniform, choice, sample
 from ..categories import icons
+sys.path.append(os.path.dirname(__file__))
+from lora_info import get_lora_info
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "comfy"))
 
@@ -451,7 +455,8 @@ class CR_RandomLoRACustom:
 
         return inputs
 
-    RETURN_TYPES = ("LORA_STACK",)
+    RETURN_TYPES = ("LORA_STACK", "STRING", "STRING")
+    RETURN_NAMES = ("lora_stack", "trigger_words", "help_text")
     FUNCTION = "random_lora_stacker"
     CATEGORY = icons.get("Comfyroll/LoRA")
 
@@ -466,7 +471,10 @@ class CR_RandomLoRACustom:
     @classmethod
     def IS_CHANGED(cls, exclusive_mode, stride, force_randomize_after_stride, lora_stack=None, **kwargs):
         lora_names = [kwargs.get(f"lora_name_{i}") for i in range(1, 11) if kwargs.get(f"lora_name_{i}") != "None"]
+        print("IS_CHANGED lora_names:", lora_names)
+
         id_hash = cls.getIdHash(lora_names)
+        print("IS_CHANGED id_hash:", id_hash)
 
         if id_hash not in cls.StridesMap:
             cls.StridesMap[id_hash] = 0
@@ -484,11 +492,10 @@ class CR_RandomLoRACustom:
             if not active_loras:
                 return selected
 
-            from random import choice
+            from random import choice, sample
             if exclusive_mode == "On":
                 selected.add(choice(active_loras))
             else:
-                from random import sample
                 count = len(active_loras)
                 n = choice(range(1, count + 1))
                 selected = set(sample(active_loras, n))
@@ -505,28 +512,68 @@ class CR_RandomLoRACustom:
         cls.UsedLorasMap[id_hash] = lora_set
         hash_str = str(hash(frozenset(lora_set)))
         cls.LastHashMap[id_hash] = hash_str
+
+        print(f"IS_CHANGED selected lora_set for {id_hash}:", lora_set)
+
         return hash_str
 
+
     def random_lora_stacker(self, exclusive_mode, stride, force_randomize_after_stride, lora_stack=None, **kwargs):
-        from random import uniform
+        # Get all input LoRA names
+        lora_names = [kwargs.get(f"lora_name_{i}") for i in range(1, 11)]
+        print("Input LoRA names:", lora_names)
+
+        # Filter out "None"
+        active_loras = [name for name in lora_names if name and name != "None"]
+        print("Active LoRAs:", active_loras)
+
+        # Calculate id hash the same way as IS_CHANGED
+        id_hash = self.getIdHash(active_loras)
+        print("Calculated id_hash:", id_hash)
+
+        used_loras = self.UsedLorasMap.get(id_hash, set())
+        print("Used LoRAs from UsedLorasMap:", used_loras)
 
         lora_list = list(lora_stack) if lora_stack else []
+        trigger_words_list = []
 
-        lora_names = [kwargs.get(f"lora_name_{i}") for i in range(1, 11)]
+        # Min/max strengths per input
         min_strengths = [kwargs.get(f"min_strength_{i}") for i in range(1, 11)]
         max_strengths = [kwargs.get(f"max_strength_{i}") for i in range(1, 11)]
 
-        active_loras = [(lora_names[i], min_strengths[i], max_strengths[i]) for i in range(10) if lora_names[i] != "None"]
+        # Build list of (name, min, max)
+        all_loras = [
+            (lora_names[i], min_strengths[i], max_strengths[i])
+            for i in range(10)
+            if lora_names[i] and lora_names[i] != "None"
+        ]
 
-        id_hash = self.getIdHash([name for name, _, _ in active_loras])
-        used_loras = self.UsedLorasMap.get(id_hash, set())
-
-        for name, min_s, max_s in active_loras:
+        for name, min_s, max_s in all_loras:
             if name in used_loras:
                 strength = round(uniform(min_s, max_s), 3)
-                lora_list.append((name, strength, strength))  # model and clip weight = same
+                lora_list.append((name, strength, strength))
+                _, trainedWords, _, _ = get_lora_info(name)
+                if trainedWords:
+                    trigger_words_list.append(trainedWords)
 
-        return (lora_list,)
+        trigger_words_string = ", ".join(trigger_words_list)
+        print(f"Final used LoRAs: {used_loras}")
+        print(f"Trigger words: {trigger_words_string}")
+
+        help_text = (
+            "exclusive_mode:\n"
+            " - On: Selects only one random LoRA from the active list.\n"
+            " - Off: Selects a random number of LoRAs (between 1 and total active LoRAs).\n\n"
+            "stride:\n"
+            " - Controls how many calls happen before new randomization.\n"
+            " - If stride > 1, the same random selection repeats until the stride count is reached.\n\n"
+            "force_randomize_after_stride:\n"
+            " - On: Forces randomization even if stride is active and selection would repeat.\n"
+            " - Off: Allows repeated selections within the stride."
+        )
+
+        return (lora_list, trigger_words_string, help_text)
+
 
 
 #---------------------------------------------------------------------------------------------------------------------#
